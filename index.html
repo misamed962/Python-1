@@ -1,0 +1,550 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Авантюристы: Забег по Пересеченной Местности</title>
+<style>
+body {
+  margin: 0;
+  padding: 0;
+  background-color: #222;
+  color: #fff;
+  font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  height: 100vh;
+  overflow: hidden;
+}
+#game-container {
+  position: relative;
+  width: 800px;
+  height: 500px;
+  background-color: #333;
+  border: 4px solid #555;
+  border-radius: 10px;
+  box-shadow: 0 0 20px rgba(0,0,0,0.8);
+  overflow: hidden;
+}
+.screen {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  align-items: center;
+  background: rgba(0, 0, 0, 0.85);
+  z-index: 10;
+  text-align: center;
+}
+.hidden { display: none !important; }
+h1, h2 { margin: 10px 0; color: #ffcc00; }
+input[type="text"] {
+  padding: 10px;
+  font-size: 16px;
+  border-radius: 5px;
+  border: 1px solid #ccc;
+  margin-bottom: 20px;
+  width: 200px;
+  text-align: center;
+}
+button {
+  padding: 10px 20px;
+  font-size: 18px;
+  background-color: #ffcc00;
+  color: #000;
+  border: none;
+  border-radius: 5px;
+  cursor: pointer;
+  font-weight: bold;
+  transition: 0.2s;
+  margin: 5px;
+}
+button:hover { background-color: #fff; }
+button:disabled {
+  background-color: #555;
+  color: #888;
+  cursor: not-allowed;
+}
+.grid-container {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 15px;
+  max-width: 90%;
+  max-height: 70%;
+  overflow-y: auto;
+  padding: 10px;
+}
+.char-card, .map-card {
+  background: #444;
+  border: 2px solid #666;
+  border-radius: 8px;
+  padding: 10px;
+  cursor: pointer;
+  transition: 0.2s;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+}
+.char-card:hover:not(.locked), .map-card:hover:not(.locked) {
+  border-color: #ffcc00;
+  background: #555;
+}
+.char-avatar {
+  width: 50px;
+  height: 50px;
+  border-radius: 50%;
+  margin-bottom: 5px;
+}
+.locked {
+  opacity: 0.5;
+  cursor: not-allowed;
+  border-color: #333;
+}
+#canvas { display: block; background-color: #87CEEB; }
+#ui-layer {
+  position: absolute;
+  top: 10px;
+  left: 10px;
+  right: 10px;
+  display: flex;
+  justify-content: space-between;
+  pointer-events: none;
+  font-size: 20px;
+  font-weight: bold;
+  text-shadow: 2px 2px 0 #000;
+  z-index: 5;
+}
+#error-msg {
+  color: #ff6666;
+  min-height: 20px;
+  margin-bottom: 10px;
+  font-size: 14px;
+}
+</style>
+</head>
+<body>
+<div id="game-container">
+
+  <!-- Экран 1: Приветствие -->
+  <div id="screen-start" class="screen">
+    <h1>Авантюристы: Забег</h1>
+    <p>Введите имя вашего героя:</p>
+    <input type="text" id="player-name" placeholder="Имя..." maxlength="15">
+    <div id="error-msg"></div>
+    <button onclick="saveName()">Далее</button>
+  </div>
+
+  <!-- Экран 2: Выбор персонажа -->
+  <div id="screen-char" class="screen hidden">
+    <h2>Выберите персонажа</h2>
+    <div class="grid-container" id="char-list"></div>
+  </div>
+
+  <!-- Экран 3: Выбор карты -->
+  <div id="screen-map" class="screen hidden">
+    <h2>Выберите локацию</h2>
+    <div class="grid-container" id="map-list"></div>
+    <button onclick="startGame()" style="margin-top: 15px;" id="btn-start-map" disabled>Начать забег</button>
+  </div>
+
+  <!-- Экран 4: Игра -->
+  <div id="screen-game" class="hidden">
+    <div id="ui-layer">
+      <div id="ui-player">Игрок</div>
+      <div id="ui-score">Счет: 0 / 100</div>
+    </div>
+    <canvas id="canvas" width="800" height="500"></canvas>
+  </div>
+
+  <!-- Экран 5: Конец игры / Победа -->
+  <div id="screen-end" class="screen hidden">
+    <h1 id="end-title">Игра Окончена</h1>
+    <p id="end-text"></p>
+    <button onclick="restartGame()">Попробовать снова</button>
+    <button id="btn-next-map" class="hidden" onclick="goToNextMap()">Следующая карта</button>
+  </div>
+
+</div>
+
+<script>
+// --- БЕЗОПАСНОЕ ХРАНИЛИЩЕ ---
+// localStorage внутри упакованного окна может быть заблокирован,
+// поэтому оборачиваем его в try/catch: если недоступен — прогресс
+// хранится в памяти до закрытия игры.
+const storage = {
+  get(key) {
+    try { return localStorage.getItem(key); } catch (e) { return null; }
+  },
+  set(key, value) {
+    try { localStorage.setItem(key, value); } catch (e) { /* хранилище недоступно */ }
+  }
+};
+
+// --- ДАННЫЕ ---
+const CHARACTERS = [
+  { id: 1, name: 'Арс Ловент',      color: '#8B4513' },
+  { id: 2, name: 'Леди Лисия',      color: '#FF69B4' },
+  { id: 3, name: 'Рейн Шраут',      color: '#000000' },
+  { id: 4, name: 'Эстель Брайт',    color: '#FFD700' },
+  { id: 5, name: 'Джошуа Брайт',    color: '#DAA520' },
+  { id: 6, name: 'Тита',            color: '#1E90FF' },
+  { id: 7, name: 'Агат Кроснер',    color: '#FF4500' },
+  { id: 8, name: 'Клаус Рейнфорд',  color: '#C0C0C0' }
+];
+
+// Генерация 20 карт с разной сложностью и ландшафтом
+const MAPS = [];
+const mapNames = ["Лесная тропа", "Зеленые поля", "Быстрый ручей", "Каменный перевал", "Густой ельник",
+"Заброшенный тракт", "Болота", "Песчаные дюны", "Горное ущелье", "Пещера эха",
+"Осенний лес", "Зимняя дорога", "Вулканические земли", "Ледяное плато", "Проклятая роща",
+"Пустошь драконов", "Небесные острова", "Городские руины", "Бездна", "Финальное испытание"];
+const bgColors = ["#87CEEB", "#90EE90", "#4682B4", "#A9A9A9", "#228B22", "#D2B48C", "#556B2F", "#F4A460", "#808080", "#2F4F4F",
+"#B8860B", "#F0F8FF", "#8B0000", "#ADD8E6", "#4B0082", "#CD853F", "#00CED1", "#696969", "#000000", "#FFD700"];
+
+for (let i = 0; i < 20; i++) {
+  MAPS.push({
+    id: i,
+    name: mapNames[i],
+    bgColor: bgColors[i],
+    speed: 4 + (i * 0.5),
+    goalScore: 50 + (i * 20),
+    obstacleRate: 0.01 + (i * 0.002)
+  });
+}
+
+// --- СОСТОЯНИЕ ИГРЫ ---
+let playerName = "";
+let selectedChar = null;
+let selectedMapId = 0;
+let unlockedMaps = parseInt(storage.get('unlockedMaps')) || 1;
+
+// Переменные игры
+let canvas, ctx;
+let gameLoopId;
+let score = 0;
+let isGameOver = false;
+let isVictory = false;
+let player = {
+  x: 100,
+  y: 0,
+  width: 40,
+  height: 60,
+  vy: 0,
+  gravity: 0.6,
+  jumpPower: -12,
+  isJumping: false,
+  baseY: 380
+};
+let obstacles = [];
+let collectibles = [];
+let frameCount = 0;
+let currentMapData = null;
+
+// --- ЛОГИКА ЭКРАНОВ ---
+function saveName() {
+  const nameInput = document.getElementById('player-name').value.trim();
+  const errBox = document.getElementById('error-msg');
+  if (nameInput === "") {
+    errBox.innerText = "Пожалуйста, введите имя!";
+    return;
+  }
+  errBox.innerText = "";
+  playerName = nameInput;
+  document.getElementById('screen-start').classList.add('hidden');
+  document.getElementById('screen-char').classList.remove('hidden');
+  renderCharacters();
+}
+
+// Enter в поле имени — то же самое, что кнопка "Далее"
+document.getElementById('player-name').addEventListener('keydown', (e) => {
+  if (e.key === 'Enter') {
+    e.preventDefault();
+    saveName();
+  }
+});
+
+function renderCharacters() {
+  const list = document.getElementById('char-list');
+  list.innerHTML = '';
+  CHARACTERS.forEach(char => {
+    const card = document.createElement('div');
+    card.className = 'char-card';
+    card.onclick = () => selectChar(char.id);
+
+    const avatar = document.createElement('div');
+    avatar.className = 'char-avatar';
+    avatar.style.backgroundColor = char.color;
+
+    const name = document.createElement('span');
+    name.innerText = char.name;
+
+    card.appendChild(avatar);
+    card.appendChild(name);
+    list.appendChild(card);
+  });
+}
+
+function selectChar(id) {
+  selectedChar = CHARACTERS.find(c => c.id === id);
+  document.getElementById('screen-char').classList.add('hidden');
+  document.getElementById('screen-map').classList.remove('hidden');
+  renderMaps();
+}
+
+function renderMaps() {
+  const list = document.getElementById('map-list');
+  list.innerHTML = '';
+  document.getElementById('btn-start-map').disabled = true;
+
+  MAPS.forEach((map, index) => {
+    const card = document.createElement('div');
+    card.className = 'map-card';
+    if (index >= unlockedMaps) card.classList.add('locked');
+    card.onclick = () => {
+      if (index < unlockedMaps) {
+        selectMap(index);
+      }
+    };
+    const name = document.createElement('span');
+    name.innerText = `${index + 1}. ${map.name}`;
+    card.appendChild(name);
+    list.appendChild(card);
+  });
+}
+
+function selectMap(index) {
+  selectedMapId = index;
+  document.getElementById('btn-start-map').disabled = false;
+  const cards = document.querySelectorAll('.map-card');
+  cards.forEach((c, i) => {
+    if (i === index) c.style.border = "2px solid #ffcc00";
+    else c.style.border = "2px solid #666";
+  });
+}
+
+function startGame() {
+  document.getElementById('screen-map').classList.add('hidden');
+  document.getElementById('screen-game').classList.remove('hidden');
+  initCanvas();
+  startLevel();
+}
+
+// --- ЛОГИКА ИГРЫ (CANVAS) ---
+function initCanvas() {
+  canvas = document.getElementById('canvas');
+  ctx = canvas.getContext('2d');
+  canvas.width = 800;
+  canvas.height = 500;
+}
+
+function startLevel() {
+  if (gameLoopId) cancelAnimationFrame(gameLoopId);
+  currentMapData = MAPS[selectedMapId];
+  score = 0;
+  isGameOver = false;
+  isVictory = false;
+  obstacles = [];
+  collectibles = [];
+  frameCount = 0;
+  player.y = player.baseY;
+  player.vy = 0;
+  player.isJumping = false;
+
+  document.getElementById('ui-player').innerText = `${playerName} (${selectedChar.name})`;
+  updateScoreUI();
+  gameLoopId = requestAnimationFrame(gameLoop);
+}
+
+function gameLoop() {
+  if (isGameOver || isVictory) return;
+  update();
+  draw();
+  frameCount++;
+  gameLoopId = requestAnimationFrame(gameLoop);
+}
+
+function update() {
+  // Физика игрока
+  player.y += player.vy;
+  player.vy += player.gravity;
+  if (player.y > player.baseY) {
+    player.y = player.baseY;
+    player.vy = 0;
+    player.isJumping = false;
+  }
+
+  // Генерация препятствий и очков
+  if (Math.random() < currentMapData.obstacleRate && frameCount > 60) {
+    const type = Math.floor(Math.random() * 3);
+    let obsColor = "#A9A9A9";
+    let obsHeight = 40;
+    if (type === 1) { obsColor = "#1E90FF"; obsHeight = 30; } // Ручей
+    if (type === 2) { obsColor = "#228B22"; obsHeight = 45; } // Гусеница
+    obstacles.push({
+      x: canvas.width,
+      y: player.baseY + player.height - obsHeight,
+      width: 40,
+      height: obsHeight,
+      color: obsColor
+    });
+  }
+
+  if (Math.random() < 0.03 && frameCount > 60) {
+    collectibles.push({
+      x: canvas.width,
+      y: player.baseY + player.height - 80 - Math.random() * 100,
+      radius: 10,
+      color: "#FFD700"
+    });
+  }
+
+  // Движение объектов
+  for (let i = obstacles.length - 1; i >= 0; i--) {
+    obstacles[i].x -= currentMapData.speed;
+    if (obstacles[i].x + obstacles[i].width < 0) obstacles.splice(i, 1);
+  }
+  for (let i = collectibles.length - 1; i >= 0; i--) {
+    collectibles[i].x -= currentMapData.speed;
+    if (collectibles[i].x + collectibles[i].radius < 0) collectibles.splice(i, 1);
+  }
+
+  // Коллизии: препятствия (проигрыш)
+  for (let obs of obstacles) {
+    if (checkCollision(player, obs)) {
+      gameOver();
+      return;
+    }
+  }
+
+  // Коллизии: сбор очков
+  for (let i = collectibles.length - 1; i >= 0; i--) {
+    let c = collectibles[i];
+    let dist = Math.hypot((player.x + player.width/2) - c.x, (player.y + player.height/2) - c.y);
+    if (dist < c.radius + player.width/2) {
+      score += 10;
+      collectibles.splice(i, 1);
+      updateScoreUI();
+      if (score >= currentMapData.goalScore) {
+        victory();
+        return;
+      }
+    }
+  }
+}
+
+function checkCollision(rect1, rect2) {
+  return (rect1.x < rect2.x + rect2.width &&
+          rect1.x + rect1.width > rect2.x &&
+          rect1.y < rect2.y + rect2.height &&
+          rect1.y + rect1.height > rect2.y);
+}
+
+function draw() {
+  // Фон
+  ctx.fillStyle = currentMapData.bgColor;
+  ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+  // Земля
+  ctx.fillStyle = "#654321";
+  ctx.fillRect(0, player.baseY + player.height, canvas.width, canvas.height - (player.baseY + player.height));
+
+  // Игрок
+  ctx.fillStyle = selectedChar.color;
+  ctx.fillRect(player.x, player.y, player.width, player.height);
+
+  // Глаза для милоты
+  ctx.fillStyle = "white";
+  ctx.fillRect(player.x + 25, player.y + 10, 10, 10);
+  ctx.fillStyle = "black";
+  ctx.fillRect(player.x + 28, player.y + 12, 4, 4);
+
+  // Препятствия
+  obstacles.forEach(obs => {
+    ctx.fillStyle = obs.color;
+    ctx.fillRect(obs.x, obs.y, obs.width, obs.height);
+    if (obs.color === "#228B22") { // Гусеница
+      ctx.fillStyle = "yellow";
+      ctx.fillRect(obs.x + 5, obs.y + 5, 5, 5);
+    }
+  });
+
+  // Очки
+  collectibles.forEach(c => {
+    ctx.beginPath();
+    ctx.arc(c.x, c.y, c.radius, 0, Math.PI * 2);
+    ctx.fillStyle = c.color;
+    ctx.fill();
+    ctx.strokeStyle = "#DAA520";
+    ctx.lineWidth = 2;
+    ctx.stroke();
+  });
+}
+
+function updateScoreUI() {
+  document.getElementById('ui-score').innerText = `Счет: ${score} / ${currentMapData.goalScore}`;
+}
+
+// --- УПРАВЛЕНИЕ ---
+document.addEventListener('keydown', (e) => {
+  if (document.getElementById('screen-game').classList.contains('hidden')) return;
+  if ((e.code === 'Space' || e.code === 'ArrowUp' || e.code === 'KeyW') && !player.isJumping) {
+    e.preventDefault();
+    player.vy = player.jumpPower;
+    player.isJumping = true;
+  }
+});
+
+// --- КОНЕЦ ИГРЫ ---
+function gameOver() {
+  isGameOver = true;
+  cancelAnimationFrame(gameLoopId);
+  document.getElementById('screen-game').classList.add('hidden');
+  document.getElementById('screen-end').classList.remove('hidden');
+  document.getElementById('end-title').innerText = "Вы проиграли!";
+  document.getElementById('end-title').style.color = "#ff4444";
+  document.getElementById('end-text').innerText = `Вы наткнулись на препятствие на карте "${currentMapData.name}". Счет: ${score}`;
+  document.getElementById('btn-next-map').classList.add('hidden');
+}
+
+function victory() {
+  isVictory = true;
+  cancelAnimationFrame(gameLoopId);
+  document.getElementById('screen-game').classList.add('hidden');
+  document.getElementById('screen-end').classList.remove('hidden');
+  document.getElementById('end-title').innerText = "Победа!";
+  document.getElementById('end-title').style.color = "#00ff00";
+  document.getElementById('end-text').innerText = `Вы успешно прошли карту "${currentMapData.name}"!`;
+
+  const btnNext = document.getElementById('btn-next-map');
+  if (selectedMapId + 1 === unlockedMaps && unlockedMaps < MAPS.length) {
+    unlockedMaps++;
+    storage.set('unlockedMaps', unlockedMaps);
+    btnNext.classList.remove('hidden');
+  } else if (selectedMapId === MAPS.length - 1) {
+    document.getElementById('end-text').innerText = "Поздравляем! Вы прошли все 20 карт!";
+    btnNext.classList.add('hidden');
+  } else {
+    btnNext.classList.add('hidden');
+  }
+}
+
+function restartGame() {
+  document.getElementById('screen-end').classList.add('hidden');
+  document.getElementById('screen-game').classList.remove('hidden');
+  startLevel();
+}
+
+function goToNextMap() {
+  selectedMapId++;
+  document.getElementById('screen-end').classList.add('hidden');
+  document.getElementById('screen-game').classList.remove('hidden');
+  startLevel();
+}
+</script>
+</body>
+</html>
